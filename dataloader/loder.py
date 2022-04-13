@@ -1,9 +1,10 @@
 import os
 import numpy as np
-from PIL import Image
+from PIL import Image,ImageFilter
 import matplotlib.pyplot as plt
 import torch
 from torchvision import transforms
+import random
 
 class Getdata(torch.utils.data.Dataset):
     def __init__(self, is_train, data_root,crop_size,pattern="random"):
@@ -23,7 +24,8 @@ class Getdata(torch.utils.data.Dataset):
         self.root = data_root
         self.pattern = pattern
         images,labels,self.classes = self.read_file_list(root=self.root,is_train=is_train)
-        self.images,self.labels = self.filter(images,labels,crop_size)  # images list
+        images,labels= self.filter(images,labels,crop_size)  # images list
+        self.images,self.labels = images * 4, labels * 4
         print('Read ' + str(len(self.images)) + ' valid examples')
 
     
@@ -44,6 +46,7 @@ class Getdata(torch.utils.data.Dataset):
         image = Image.open(image).convert('RGB')
 
         image = self.rand_crop(image,*self.crop_size,self.pattern)
+        image = self.data_aug(image)
         image = self.tsf(image)
 
         return image, self.labels[idx]  # float32 tensor, uint8 tensor
@@ -86,8 +89,23 @@ class Getdata(torch.utils.data.Dataset):
             centerCrop = transforms.CenterCrop(size=(height//2, width//2))
             image = centerCrop(image)
         
-        resize = transforms.Resize([height//2,width//2])
+        resize = transforms.Resize([224,224])
         return resize(image)
+
+    def data_aug(self,image):
+        '''
+        图像增强
+        '''
+        num = random.randint(0,2)
+        # 原图返回
+        if num == 0:
+            return image
+        # 左右翻转
+        elif num == 1:
+            return image.transpose(Image.FLIP_LEFT_RIGHT)
+        # 高斯模糊
+        elif num == 2:
+            return image.filter(ImageFilter.GaussianBlur(radius=3))
 
     def show(self,key):
         """
