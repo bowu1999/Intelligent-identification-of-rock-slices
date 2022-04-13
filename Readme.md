@@ -53,5 +53,5 @@ conda env create -f 环境名.yaml
 
 ## 模型架构
 
-![image-20220413104812998](Readme.assets/image-20220413104812998.png)
+![image-20220413104812998](Readme.assets/image-20220413104812998.jpg)
 
