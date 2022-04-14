@@ -1,5 +1,5 @@
 from dataloader import Getdata
-from mymodels import RockSlice02
+from mymodels import RockSlice03
 import torch.nn as nn
 import numpy as np
 import torch
@@ -15,7 +15,8 @@ def train(model, device, trainloader_mid, trainloader_max, f_loss, optimizer, ep
 		img_mid = data_mid[1][0].to(torch.float32).to(device)
 		img_max = data_max[1][0].to(torch.float32).to(device)
 		target = data_max[1][1].to(torch.float32).to(device)
-		output = model(img_mid,img_max)
+		x = (img_mid,img_max)
+		output = model(*x)
 		loss = f_loss(output, target)
 		optimizer.zero_grad()
 		loss.backward()
@@ -39,7 +40,8 @@ def test(model, device, testloader_mid, testloader_max, f_loss,epoch):
 			img_mid = data_mid[1][0].to(torch.float32).to(device)
 			img_max = data_max[1][0].to(torch.float32).to(device)
 			target = data_max[1][1].to(torch.float32).to(device)
-			output = model(img_mid,img_max)
+			x = (img_mid,img_max)
+			output = model(*x)
 			loss = f_loss(output, target)
 			val_epoch_loss.append(loss.item())
 			pred = output.argmax(dim=1)
@@ -68,12 +70,12 @@ def main():
 	# 参数设置
 	epochs = 100
 	class_num = 20 #种类数
-	learning_rate = 0.05
+	learning_rate = 0.005
 	device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-	model = RockSlice02(class_num)
+	model = RockSlice03(class_num)
 	params = [{'params': filter(lambda p:p.requires_grad, model.get_decoder_params())},
 	          {'params': filter(lambda p:p.requires_grad, model.get_backbone_params()), 
-	           'lr': learning_rate*5}]
+	           'lr': learning_rate*2}]
 	# 冻结backbone的参数
 	for name, param in model.named_parameters():
 		if "backbone" in name:
