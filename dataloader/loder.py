@@ -25,7 +25,7 @@ class Getdata(torch.utils.data.Dataset):
         self.pattern = pattern
         images,labels,self.classes = self.read_file_list(root=self.root,is_train=is_train)
         images,labels= self.filter(images,labels,crop_size)  # images list
-        self.images,self.labels = images * 4, labels * 4
+        self.images,self.labels = images * 5, labels * 5
         print('Read ' + str(len(self.images)) + ' valid examples')
 
     
@@ -96,16 +96,30 @@ class Getdata(torch.utils.data.Dataset):
         '''
         图像增强
         '''
-        num = random.randint(0,2)
-        # 原图返回
+        # 调整亮度、对比度和饱和度
+        color_jitter = transforms.ColorJitter(brightness=1,contrast=0.5,saturation=0.5,hue=0.4)
+        # 依概率p水平翻转
+        h_flip = transforms.RandomHorizontalFlip(0.9)
+        # 依概率p垂直翻转
+        v_flip = transforms.RandomVerticalFlip(0.9)
+        # 仿射变换
+        random_affine = transforms.RandomAffine(45, (0.5, 0.7), (0.5, 0.8), 3)
+        num = random.randint(0,4)
+        # 亮度，对比度，饱和度
         if num == 0:
-            return image
+            return color_jitter(image)
         # 左右翻转
         elif num == 1:
-            return image.transpose(Image.FLIP_LEFT_RIGHT)
-        # 高斯模糊
+            return h_flip(image)
+        # 垂直翻转
         elif num == 2:
-            return image.filter(ImageFilter.GaussianBlur(radius=3))
+            return v_flip(image)
+        # 高斯模糊
+        elif num == 3:
+            return image.filter(ImageFilter.GaussianBlur(radius=1))
+        #
+        elif num == 4:
+            return random_affine(image)
 
     def show(self,key):
         """
