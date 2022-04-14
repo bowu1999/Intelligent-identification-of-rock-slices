@@ -146,12 +146,10 @@ class Decoder(nn.Module):
             nn.ReLU(inplace=True)
         )
         self.adaptivepool2s =  nn.AdaptiveAvgPool2d(1)
-        self.fc0 = nn.Linear(in_features=1024, out_features=512, bias=True)
-        self.fc1 = nn.Linear(in_features=512, out_features=num_classes, bias=True)
         self.output = nn.Sequential(
-            self.fc0,
+            nn.Linear(in_features=1024, out_features=512, bias=True),
             nn.ReLU(inplace=True),
-            self.fc1
+            nn.Linear(in_features=512, out_features=num_classes, bias=True)
         )
 #         
         initialize_weights(self)
