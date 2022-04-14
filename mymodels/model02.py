@@ -91,16 +91,16 @@ class ASSP(nn.Module):
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Conv2d(in_channels, 256, 1, bias=False),
             nn.BatchNorm2d(256,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
-            nn.ReLU(inplace=True)
-            nn.Dropout(0.5)
-            )
+            nn.ReLU(inplace=True))
         self.avg_pool_single = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Conv2d(in_channels, 256, 1, bias=False),
-            nn.ReLU(inplace=True)
-            nn.Dropout(0.5)
-            )
+            nn.ReLU(inplace=True))
         
+        self.conv1 = nn.Conv2d(256*5, 256, 1, bias=False)
+        self.bn1 = nn.BatchNorm2d(256,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        self.relu = nn.ReLU(inplace=True)
+        self.dropout = nn.Dropout(0.5)
 
         initialize_weights(self)
 
@@ -133,22 +133,24 @@ class Decoder(nn.Module):
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=2)
         )
-        # self.conv1 = 
         self.layer1 =  nn.Sequential(
             nn.Conv2d(320, 128, kernel_size=(1, 1), stride=(1, 1), bias=False),
+            nn.BatchNorm2d(128,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=True),
             nn.Conv2d(128, 512, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False),
             nn.BatchNorm2d(512,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
             nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2),
             nn.Conv2d(512, 1024, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1), bias=False),
             nn.BatchNorm2d(1024, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2)
+            nn.ReLU(inplace=True)
         )
         self.adaptivepool2s =  nn.AdaptiveAvgPool2d(1)
         self.fc0 = nn.Linear(in_features=1024, out_features=512, bias=True)
         self.fc1 = nn.Linear(in_features=512, out_features=num_classes, bias=True)
         self.output = nn.Sequential(
             self.fc0,
+            nn.ReLU(inplace=True),
             self.fc1
         )
 #         
