@@ -1,10 +1,11 @@
 import torch
-from base import BaseModel
+from base import BaseModel,ResNet50
 from torch import nn
 from torch.nn import functional as F
 import torchvision.models as models
 from itertools import chain
 
+# 参数初始化
 def initialize_weights(*models):
     for model in models:
         for m in model.modules():
@@ -17,15 +18,18 @@ def initialize_weights(*models):
                 m.weight.data.normal_(0.0, 0.0001)
                 m.bias.data.zero_()
 
-# 编码器
-class ResNet(nn.Module):
-    def __init__(self, in_channels=3, output_stride=16, backbone='resnet101', pretrained=True):
-        super(ResNet, self).__init__()
+'''
+编码器
+'''
+# backbone
+class Backbone(nn.Module):
+    def __init__(self, in_channels=3, backbone='resnet50', pretrained=True):
+        super(Backbone, self).__init__()
         model = getattr(models, backbone)(pretrained)
         if not pretrained or in_channels != 3:
             self.layer0 = nn.Sequential(
                 nn.Conv2d(in_channels, 64, 7, stride=2, padding=3, bias=False),
-                nn.BatchNorm2d(64),
+                nn.BatchNorm2d(64,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
                 nn.ReLU(inplace=True),
                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
             )
@@ -38,52 +42,45 @@ class ResNet(nn.Module):
         self.layer3 = model.layer3
         self.layer4 = model.layer4
 
-        if output_stride == 16: s3, s4, d3, d4 = (2, 1, 1, 2)
-        elif output_stride == 8: s3, s4, d3, d4 = (1, 1, 2, 4)
+        s3, s4, d3, d4 = (1, 1, 2, 4)
         
-        if output_stride == 8: 
-            for n, m in self.layer3.named_modules():
-                if 'conv1' in n and (backbone == 'resnet34' or backbone == 'resnet18'):
-                    m.dilation, m.padding, m.stride = (d3,d3), (d3,d3), (s3,s3)
-                elif 'conv2' in n:
-                    m.dilation, m.padding, m.stride = (d3,d3), (d3,d3), (s3,s3)
-                elif 'downsample.0' in n:
-                    m.stride = (s3, s3)
+        for n, m in self.layer3.named_modules():
+            if 'conv2' in n:
+                m.dilation, m.padding, m.stride = (d3,d3), (d3,d3), (s3,s3)
+            elif 'downsample.0' in n:
+                m.stride = (s3, s3)
 
         for n, m in self.layer4.named_modules():
-            if 'conv1' in n and (backbone == 'resnet34' or backbone == 'resnet18'):
-                m.dilation, m.padding, m.stride = (d4,d4), (d4,d4), (s4,s4)
-            elif 'conv2' in n:
+            if 'conv2' in n:
                 m.dilation, m.padding, m.stride = (d4,d4), (d4,d4), (s4,s4)
             elif 'downsample.0' in n:
                 m.stride = (s4, s4)
 
-    def forward(self, x):
-        x = self.layer0(x)
+    def forward(self, x_mid, x_max):
+        x_ = self.layer0(x_mid)
+        x_ = self.layer1(x_)
+        low_level_features = x_
+        x = self.layer0(x_max)
         x = self.layer1(x)
-        low_level_features = x
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
 
-        return x, low_level_features
+        return low_level_features,x
 
-
-
+# ASSP
 def assp_branch(in_channels, out_channles, kernel_size, dilation):
     padding = 0 if kernel_size == 1 else dilation
     return nn.Sequential(
             nn.Conv2d(in_channels, out_channles, kernel_size, padding=padding, dilation=dilation, bias=False),
-            nn.BatchNorm2d(out_channles),
+            nn.BatchNorm2d(out_channles,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
             nn.ReLU(inplace=True))
 
 class ASSP(nn.Module):
-    def __init__(self, in_channels, output_stride):
+    def __init__(self, in_channels):
         super(ASSP, self).__init__()
 
-        assert output_stride in [8, 16], 'Only output strides of 8 or 16 are suported'
-        if output_stride == 16: dilations = [1, 6, 12, 18]
-        elif output_stride == 8: dilations = [1, 12, 24, 36]
+        dilations = [1, 12, 24, 36]
         
         self.aspp1 = assp_branch(in_channels, 256, 1, dilation=dilations[0])
         self.aspp2 = assp_branch(in_channels, 256, 3, dilation=dilations[1])
@@ -93,12 +90,15 @@ class ASSP(nn.Module):
         self.avg_pool = nn.Sequential(
             nn.AdaptiveAvgPool2d((1, 1)),
             nn.Conv2d(in_channels, 256, 1, bias=False),
-            # 预测时不需要
-            nn.BatchNorm2d(256),
+            nn.BatchNorm2d(256,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=True))
+        self.avg_pool_single = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Conv2d(in_channels, 256, 1, bias=False),
             nn.ReLU(inplace=True))
         
         self.conv1 = nn.Conv2d(256*5, 256, 1, bias=False)
-        self.bn1 = nn.BatchNorm2d(256)
+        self.bn1 = nn.BatchNorm2d(256,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
         self.relu = nn.ReLU(inplace=True)
         self.dropout = nn.Dropout(0.5)
 
@@ -109,7 +109,10 @@ class ASSP(nn.Module):
         x2 = self.aspp2(x)
         x3 = self.aspp3(x)
         x4 = self.aspp4(x)
-        x5 = F.interpolate(self.avg_pool(x), size=(x.size(2), x.size(3)), mode='bilinear', align_corners=True)
+        if x.size(0) == 1:
+            x5 = F.interpolate(self.avg_pool_single(x), size=(x.size(2), x.size(3)), mode='bilinear', align_corners=True)
+        else:
+            x5 = F.interpolate(self.avg_pool(x), size=(x.size(2), x.size(3)), mode='bilinear', align_corners=True)
 
         x = self.conv1(torch.cat((x1, x2, x3, x4, x5), dim=1))
         x = self.bn1(x)
@@ -117,59 +120,55 @@ class ASSP(nn.Module):
 
         return x
 
-# 解码器
+'''
+解码器
+'''
+# Decoder
 class Decoder(nn.Module):
     def __init__(self, low_level_channels, num_classes):
         super(Decoder, self).__init__()
-        self.conv1 = nn.Conv2d(low_level_channels, 48, 1, bias=False)
-        self.bn1 = nn.BatchNorm2d(48)
-        self.relu = nn.ReLU(inplace=True)
-        
-        self.conv2 = nn.Conv2d(304, 128, 1, bias=False)
-        self.bn2 = nn.BatchNorm2d(128)
-        
-        model = models.resnet18(True)
-        model.conv1 = nn.Conv2d(128, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-        model.fc.out_features=num_classes
-        self.adaptivepool2s =  nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Linear(in_features=512, out_features=20, bias=True)
-        self.output = nn.Sequential(*list(model.children())[:3],
-                                    model.layer1,
-                                   model.layer2,
-                                   model.layer3,
-                                   model.layer4,
-                                   self.adaptivepool2s)
+        self.layer0 =  nn.Sequential(
+            nn.Conv2d(low_level_channels, 64, 1, bias=False),
+            nn.BatchNorm2d(64,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2)
+        )
+        self.layer1 =  nn.Sequential(
+            nn.Conv2d(320, 512, kernel_size=(1, 1), stride=(1, 1), bias=False),
+            nn.BatchNorm2d(512,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=True)
+        )
+        model = ResNet50()
+        self.layer2 = nn.Sequential(*list(model.children())[5:7])
+        self.avgpool2d = nn.AvgPool2d(7)
+        self.linear = nn.Linear(2048, num_classes)
 #         
         initialize_weights(self)
 
     def forward(self, x, low_level_features):
-        low_level_features = self.conv1(low_level_features)
-        low_level_features = self.relu(self.bn1(low_level_features))
-        H, W = low_level_features.size(2), low_level_features.size(3)
+        low_level_features = self.layer0(low_level_features)
+        x = torch.cat((low_level_features,x),1)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        out = self.avgpool2d(x)
+        out = torch.flatten(out, 1)
+        out = self.linear(out)
+        return out
 
-        x = F.interpolate(x, size=(H, W), mode='bilinear', align_corners=True)
-        x = self.conv2(torch.cat((low_level_features,x),1))
-        x = self.relu(self.bn2(x))
-        x = self.output(x)
-        x = x.view(-1,x.shape[1]*x.shape[2]*x.shape[3])
-        return self.fc(x)
-
-# 模型
-class RockSlice(BaseModel):
-    def __init__(self, num_classes, in_channels=3, pretrained=True, 
-                output_stride=16, **_):
+# 模型 RockSlice03
+class RockSlice03(BaseModel):
+    def __init__(self, num_classes, **_):
                 
-        super(RockSlice, self).__init__()
-        self.backbone = ResNet(in_channels=in_channels, output_stride=output_stride, pretrained=pretrained)
+        super(RockSlice03, self).__init__()
+        self.backbone = Backbone()
         low_level_channels = 256
 
-        self.ASSP = ASSP(in_channels=2048, output_stride=output_stride)
+        self.ASSP = ASSP(in_channels=2048)
         self.decoder = Decoder(low_level_channels, num_classes)
 
 
-    def forward(self, x):
-        H, W = x.size(2), x.size(3)
-        x, low_level_features = self.backbone(x)
+    def forward(self, x_mid,x_max):
+        low_level_features,x = self.backbone(x_mid,x_max)
         x = self.ASSP(x)
         x = self.decoder(x, low_level_features)
         return x
