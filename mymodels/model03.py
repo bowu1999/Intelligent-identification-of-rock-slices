@@ -16,7 +16,8 @@ def initialize_weights(*models):
                 m.bias.data.fill_(1e-4)
             elif isinstance(m, nn.Linear):
                 m.weight.data.normal_(0.0, 0.0001)
-                m.bias.data.zero_()
+                if m.bias != None:
+                    m.bias.data.zero_()
 
 '''
 编码器
