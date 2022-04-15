@@ -50,9 +50,9 @@ class Bottleneck(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.adaptiveAvgPool2d = nn.AdaptiveAvgPool2d((1, 1))
         self.attention = nn.Sequential(
-            nn.Linear(in_features=out_channel*self.expansion, out_features=out_channel, bias=False),
+            nn.Linear(in_features=out_channel, out_features=out_channel//4, bias=False),
             nn.ReLU(inplace=True),
-            nn.Linear(in_features=out_channel, out_features=out_channel*self.expansion, bias=False),
+            nn.Linear(in_features=out_channel//4, out_features=out_channel, bias=False),
             nn.Sigmoid()
         )
     def forward(self, x):
@@ -63,15 +63,15 @@ class Bottleneck(nn.Module):
         out = self.bn1(out)
         out = self.relu(out)
         out = self.conv2(out)
-        out = self.bn2(out)
-        out = self.relu(out)
-        out = self.conv3(out)
-        out = self.bn3(out)
         out_avg = self.adaptiveAvgPool2d(out)
         out_avg = torch.flatten(out_avg, 1)
         out_scale = self.attention(out_avg)     #注意力机制
         out_scale = out_scale.unsqueeze(2).unsqueeze(2)
         out *= out_scale
+        out = self.bn2(out)
+        out = self.relu(out)
+        out = self.conv3(out)
+        out = self.bn3(out)
         out += identity     # 残差连接
         out = self.relu(out)
         return out
