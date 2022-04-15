@@ -8,6 +8,7 @@ import json
 
 def train(model, device, trainloader_mid, trainloader_max, f_loss, optimizer, epoch):
 	model.train()
+	model.freeze_bn()
 	train_epoch_loss = []
 	correct = 0.
 	for data_mid,data_max in zip(enumerate(trainloader_mid),enumerate(trainloader_max)):
@@ -52,6 +53,17 @@ def test(model, device, testloader_mid, testloader_max, f_loss,epoch):
 	print('Test Accuracy:',acc)
 	return val_epoch_loss,acc
 
+# 学习率的poly策略
+def adjust_learning_rate_poly(optimizer, epoch, num_epochs, base_lr, power):
+	lr = base_lr * (1-epoch/num_epochs)**power
+	scal = 1
+	for param_group in optimizer.param_groups:
+		param_group['lr'] = lr/scal
+		rate *= 10
+	return lr	
+
+
+
 def main():
 	
 	# 数据读取
@@ -68,28 +80,23 @@ def main():
 	valloader_max = DataLoader(dataset=val_max_set, batch_size=batch_size, shuffle=True)
 	
 	# 参数设置
-	epochs = 100
+	epochs = 200
 	class_num = 20 #种类数
-	learning_rate = 0.005
+	learning_rate = 0.1
 	device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 	model = RockSlice03(class_num)
 	params = [{'params': filter(lambda p:p.requires_grad, model.get_decoder_params())},
 	          {'params': filter(lambda p:p.requires_grad, model.get_backbone_params()), 
-	           'lr': learning_rate*2}]
+	           'lr': learning_rate/10}]
 	# 冻结backbone的参数
 	for name, param in model.named_parameters():
 		if "backbone" in name:
-			if "layer4" in name:
+			if "layer3" in name:
 				break
 			param.requires_grad = False
 	# params = [{'params': filter(lambda p:p.requires_grad, model.get_decoder_params())}]
 	celoss = nn.CrossEntropyLoss() # 交叉熵损失函数
-	adam = torch.optim.Adam(params,
-	                lr=learning_rate,
-	                betas=(0.9, 0.999),
-	                eps=1e-08,
-	                weight_decay=0.05,
-	                amsgrad=False)
+	optimizer = torch.optim.SGD(params,lr=learning_rate,momentum=0.9,dampening=0.5,weight_decay=0.01,nesterov=False)
 	## 读取模型
 	# state_dict = torch.load('trained_models/01_RockSlice.pth')
 	# model.load_state_dict(state_dict['model'])
@@ -100,20 +107,26 @@ def main():
 	val_epochs_loss = []
 	val_epochs_acc = []
 
+	now_lr = learning_rate
 	# 训练
 	for epoch in range(epochs):
-		train_epoch_loss,train_epoch_acc = train(model, device, trainloader_mid, trainloader_max, celoss, adam, epoch)
+		print("Now learning_rate:",now_lr)
+		train_epoch_loss,train_epoch_acc = train(model, device, trainloader_mid, trainloader_max, celoss, optimizer, epoch)
 		train_epochs_loss.append(np.average(train_epoch_loss))
 		train_epochs_acc.append(train_epoch_acc)
 		val_epoch_loss,val_epoch_acc = test(model, device, valloader_mid, valloader_max, celoss,epoch)
 		val_epochs_loss.append(np.average(val_epoch_loss))
 		val_epochs_acc.append(val_epoch_acc)
+		now_lr = adjust_learning_rate_poly(optimizer, epoch, epochs, learning_rate, 0.9)
+		if epoch != 0 and epoch % 20 == 0:
+			torch.save({'model': model.state_dict()}, 'trained_models/01_RockSlice03.pth')
+			print("模型保存一次")
 	save(model,train_epochs_loss,train_epochs_acc,val_epochs_loss,val_epochs_acc)
 	print("训练过程已保存")
 
 def save(model,train_epochs_loss,train_epochs_acc,val_epochs_loss,val_epochs_acc):
 	## 保存模型
-	torch.save({'model': model.state_dict()}, 'trained_models/01_RockSlice02.pth')
+	torch.save({'model': model.state_dict()}, 'trained_models/01_RockSlice03.pth')
 	# 训练过程参数
 	json_path = "training_process_data/01_RockSlice02/0_training.json"
 	save_params = {
