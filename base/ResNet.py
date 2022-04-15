@@ -50,9 +50,9 @@ class Bottleneck(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.adaptiveAvgPool2d = nn.AdaptiveAvgPool2d((1, 1))
         self.attention = nn.Sequential(
-            nn.Linear(in_features=out_channel*self.expansion, out_features=out_channel, bias=True),
+            nn.Linear(in_features=out_channel*self.expansion, out_features=out_channel, bias=False),
             nn.ReLU(inplace=True),
-            nn.Linear(in_features=out_channel, out_features=out_channel*self.expansion, bias=True),
+            nn.Linear(in_features=out_channel, out_features=out_channel*self.expansion, bias=False),
             nn.Sigmoid()
         )
     def forward(self, x):
