@@ -1,0 +1,270 @@
+import torch
+from base import BaseModel,ResNet50
+from torch import nn
+from torch.nn import functional as F
+from itertools import chain
+
+# 参数初始化
+def initialize_weights(*models):
+    for model in models:
+        for m in model.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight.data, nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1.)
+                m.bias.data.fill_(1e-4)
+            elif isinstance(m, nn.Linear):
+                m.weight.data.normal_(0.0, 0.0001)
+                if m.bias != None:
+                    m.bias.data.zero_()
+
+# 编码器中借助resnet的部分
+class Bottleneck(nn.Module):
+    """
+    __init__
+        in_channel：残差块输入通道数
+        out_channel：残差块输出通道数
+        stride：卷积步长
+        downsample：在_make_layer函数中赋值，用于控制shortcut图片下采样 H/2 W/2
+    """
+    expansion = 4   # 残差块第3个卷积层的通道膨胀倍率
+    def __init__(self, in_channel, out_channel, stride=1,downsample=None ):
+        super(Bottleneck, self).__init__()
+        self.downsample = downsample
+        self.conv1 = nn.Conv2d(in_channels=in_channel, out_channels=out_channel, kernel_size=1, stride=1, bias=False)   # H,W不变。C: in_channel -> out_channel
+        self.bn1 = nn.BatchNorm2d(num_features=out_channel)
+        self.conv2 = nn.Conv2d(in_channels=out_channel, out_channels=out_channel, kernel_size=3, stride=stride, bias=False, padding=1)  # H/2，W/2。C不变
+        self.bn2 = nn.BatchNorm2d(num_features=out_channel)
+        self.conv3 = nn.Conv2d(in_channels=out_channel, out_channels=out_channel*self.expansion, kernel_size=1, stride=1, bias=False)   # H,W不变。C: out_channel -> 4*out_channel
+        self.bn3 = nn.BatchNorm2d(num_features=out_channel*self.expansion)
+        self.relu = nn.ReLU(inplace=True)
+    def forward(self, x):
+        identity = x    # 将原始输入暂存为shortcut的输出
+        if self.downsample is not None:
+            identity = self.downsample(x)
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = self.relu(out)
+        out = self.conv3(out)
+        out = self.bn3(out)
+        out += identity     # 残差连接
+        out = self.relu(out)
+        return out
+    
+class ResNet(nn.Module):
+    def __init__(self, block, num_blocks, num_classes=10):
+        super(ResNet, self).__init__()
+        self.in_channels = 64
+        
+        self.conv1 = nn.Conv2d(3, self.in_channels, 7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(self.in_channels)
+        self.pool1 = nn.MaxPool2d(3, 2, 1)
+        
+        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
+        self.avgpool2d = nn.AvgPool2d(7)
+        self.linear = nn.Linear(512*block.expansion, num_classes)
+        
+
+    def _make_layer(self, block, channel, num_blocks, stride):
+        downsample = None
+        if stride != 1 or self.in_channels != channel*block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.in_channels, block.expansion*channel,kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(block.expansion*channel)
+            )
+        strides = [1]*(num_blocks-1)
+        layers = []
+        layers.append(block(self.in_channels, channel, stride, downsample))
+        self.in_channels = channel * block.expansion
+        for stride in strides:
+            layers.append(block(self.in_channels, channel, stride))
+            self.in_channels = channel * block.expansion
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = F.relu(self.bn1(self.conv1(x)))
+        out = self.pool1(out)
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+        out = self.avgpool2d(out)
+        out = torch.flatten(out, 1)
+        out = self.linear(out)
+        return out
+
+def ResNet50(num_classes=1000):
+    return ResNet(Bottleneck, [3,4,6,3],num_classes=num_classes)
+'''
+编码器
+'''
+# backbone
+class Backbone(nn.Module):
+    def __init__(self, in_channels=3, pretrained=True):
+        super(Backbone, self).__init__()
+        model = ResNet50()
+        if not pretrained or in_channels != 3:
+            self.layer0 = nn.Sequential(
+                nn.Conv2d(in_channels, 64, 7, stride=2, padding=3, bias=False),
+                nn.BatchNorm2d(64,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+                nn.ReLU(inplace=True),
+                nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+            )
+            initialize_weights(self.layer0)
+        else:
+            self.layer0 = nn.Sequential(*list(model.children())[:3])
+        
+        self.layer1 = model.layer1
+        self.layer2 = model.layer2
+        self.layer3 = model.layer3
+        self.layer4 = model.layer4
+
+        s3, s4, d3, d4 = (1, 1, 2, 4)
+        
+        for n, m in self.layer3.named_modules():
+            if 'conv2' in n:
+                m.dilation, m.padding, m.stride = (d3,d3), (d3,d3), (s3,s3)
+            elif 'downsample.0' in n:
+                m.stride = (s3, s3)
+
+        for n, m in self.layer4.named_modules():
+            if 'conv2' in n:
+                m.dilation, m.padding, m.stride = (d4,d4), (d4,d4), (s4,s4)
+            elif 'downsample.0' in n:
+                m.stride = (s4, s4)
+
+    def forward(self, x_mid, x_max):
+        x_ = self.layer0(x_mid)
+        x_ = self.layer1(x_)
+        low_level_features = x_
+        x = self.layer0(x_max)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        return low_level_features,x
+
+# ASSP
+def assp_branch(in_channels, out_channles, kernel_size, dilation):
+    padding = 0 if kernel_size == 1 else dilation
+    return nn.Sequential(
+            nn.Conv2d(in_channels, out_channles, kernel_size, padding=padding, dilation=dilation, bias=False),
+            nn.BatchNorm2d(out_channles,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=True))
+
+class ASSP(nn.Module):
+    def __init__(self, in_channels):
+        super(ASSP, self).__init__()
+
+        dilations = [1, 12, 24, 36]
+        
+        self.aspp1 = assp_branch(in_channels, 256, 1, dilation=dilations[0])
+        self.aspp2 = assp_branch(in_channels, 256, 3, dilation=dilations[1])
+        self.aspp3 = assp_branch(in_channels, 256, 3, dilation=dilations[2])
+        self.aspp4 = assp_branch(in_channels, 256, 3, dilation=dilations[3])
+
+        self.avg_pool = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Conv2d(in_channels, 256, 1, bias=False),
+            nn.BatchNorm2d(256,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=True))
+        self.avg_pool_single = nn.Sequential(
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Conv2d(in_channels, 256, 1, bias=False),
+            nn.ReLU(inplace=True))
+        
+        self.conv1 = nn.Conv2d(256*5, 256, 1, bias=False)
+        self.bn1 = nn.BatchNorm2d(256,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
+        self.relu = nn.ReLU(inplace=True)
+        self.dropout = nn.Dropout(0.5)
+
+        initialize_weights(self)
+
+    def forward(self, x):
+        x1 = self.aspp1(x)
+        x2 = self.aspp2(x)
+        x3 = self.aspp3(x)
+        x4 = self.aspp4(x)
+        if x.size(0) == 1:
+            x5 = F.interpolate(self.avg_pool_single(x), size=(x.size(2), x.size(3)), mode='bilinear', align_corners=True)
+        else:
+            x5 = F.interpolate(self.avg_pool(x), size=(x.size(2), x.size(3)), mode='bilinear', align_corners=True)
+
+        x = self.conv1(torch.cat((x1, x2, x3, x4, x5), dim=1))
+        x = self.bn1(x)
+        x = self.dropout(self.relu(x))
+
+        return x
+
+'''
+解码器
+'''
+# Decoder
+class Decoder(nn.Module):
+    def __init__(self, low_level_channels, num_classes):
+        super(Decoder, self).__init__()
+        self.layer0 =  nn.Sequential(
+            nn.Conv2d(low_level_channels, 64, 1, bias=False),
+            nn.BatchNorm2d(64,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2)
+        )
+        self.layer1 =  nn.Sequential(
+            nn.Conv2d(320, 512, kernel_size=(1, 1), stride=(1, 1), bias=False),
+            nn.BatchNorm2d(512,eps=1e-05, momentum=0.1, affine=True, track_running_stats=True),
+            nn.ReLU(inplace=True)
+        )
+        model = ResNet50()
+        self.layer2 = nn.Sequential(*list(model.children())[5:7])
+        self.avgpool2d = nn.AvgPool2d(7)
+        self.linear = nn.Linear(2048, num_classes)
+#         
+        initialize_weights(self)
+
+    def forward(self, x, low_level_features):
+        low_level_features = self.layer0(low_level_features)
+        x = torch.cat((low_level_features,x),1)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        out = self.avgpool2d(x)
+        out = torch.flatten(out, 1)
+        out = self.linear(out)
+        return out
+
+# 模型 RockSlice
+class RockSlice(BaseModel):
+    def __init__(self, num_classes, **_):
+                
+        super(RockSlice, self).__init__()
+        self.backbone = Backbone()
+        low_level_channels = 256
+
+        self.ASSP = ASSP(in_channels=2048)
+        self.decoder = Decoder(low_level_channels, num_classes)
+
+
+    def forward(self, x_mid,x_max):
+        low_level_features,x = self.backbone(x_mid,x_max)
+        x = self.ASSP(x)
+        x = self.decoder(x, low_level_features)
+        return x
+
+    # & Decoder / ASSP 使用可微学习率
+    # better to have higher lr for this backbone
+
+    def get_backbone_params(self):
+        return self.backbone.parameters()
+
+    def get_decoder_params(self):
+        return chain(self.ASSP.parameters(), self.decoder.parameters())
+
+    def freeze_bn(self):
+        for module in self.modules():
+            if isinstance(module, nn.BatchNorm2d): module.eval()
