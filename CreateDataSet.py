@@ -17,13 +17,15 @@ class CreateDataSets():
         '''
         获取所有的图片路径
         '''
+        extension = ['jpg','JPG','tif','TIF','png','PNG']
         data_set = []
         class_set = set()
         for first_name in self.class_first:
             for scend_name in os.listdir(os.path.join(self.root,first_name)):
                 for data_name in os.listdir(os.path.join(self.root,first_name,scend_name)):
-                    data_set.append(os.path.join(first_name,scend_name,data_name))
-                    class_set.add(os.path.join(first_name,scend_name))
+                    if data_name.split('.')[-1] in extension:
+                        data_set.append(os.path.join(first_name,scend_name,data_name))
+                        class_set.add(os.path.join(first_name,scend_name))
         return data_set,class_set
     
     def __rand_sort(self,data_set):
@@ -61,6 +63,6 @@ class CreateDataSets():
         self.__save_data(class_set,"classes")
         
 if __name__ == "__main__":
-    root = "DataSets"
-    mydataset = CreateDataSets(root,8)
+    root = "DataSets_20"
+    mydataset = CreateDataSets(root)
     mydataset.main()
