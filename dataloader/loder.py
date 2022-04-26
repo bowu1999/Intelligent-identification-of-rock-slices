@@ -25,7 +25,7 @@ class Getdata(torch.utils.data.Dataset):
         self.pattern = pattern
         images,labels,self.classes = self.read_file_list(root=self.root,is_train=is_train)
         images,labels= self.filter(images,labels,crop_size)  # images list
-        self.images,self.labels = images * 5, labels * 5
+        self.images,self.labels = images, labels
         print('Read ' + str(len(self.images)) + ' valid examples')
 
     
@@ -46,7 +46,6 @@ class Getdata(torch.utils.data.Dataset):
         image = Image.open(image).convert('RGB')
 
         image = self.rand_crop(image,*self.crop_size,self.pattern)
-        image = self.data_aug(image)
         image = self.tsf(image)
 
         return image, self.labels[idx]  # float32 tensor, uint8 tensor
@@ -96,32 +95,35 @@ class Getdata(torch.utils.data.Dataset):
         '''
         图像增强
         '''
-        # 调整亮度、对比度和饱和度
-        color_jitter = transforms.ColorJitter(brightness=1,contrast=0.5,saturation=0.5,hue=0.4)
+        # 随机对比度变换
+        c_contrast = transforms.ColorJitter(contrast=1)
+        # 随机亮度调整
+        c_brightness = transforms.ColorJitter(brightness=1)
         # 依概率p水平翻转
         h_flip = transforms.RandomHorizontalFlip(0.9)
         # 依概率p垂直翻转
         v_flip = transforms.RandomVerticalFlip(0.9)
-        # 仿射变换
-        random_affine = transforms.RandomAffine(45, (0.5, 0.7), (0.5, 0.8), 3)
-        num = random.randint(0,4)
-        # 亮度，对比度，饱和度
+        num = random.randint(0, 3)
+        # 垂直翻转
         if num == 0:
-            return color_jitter(image)
+            image = v_flip(image)
         # 左右翻转
         elif num == 1:
-            return h_flip(image)
-        # 垂直翻转
+            image = h_flip(image)
+        # 原图
         elif num == 2:
-            return v_flip(image)
-        # 高斯模糊
-        elif num == 3:
-            return image.filter(ImageFilter.GaussianBlur(radius=1))
-        #
-        elif num == 4:
-            return random_affine(image)
+            return image
+        n = random.randint(0, 2)
+        # 对比度
+        if n == 0:
+            return c_contrast(image)
+        # 亮度
+        elif n == 1:
+            return c_brightness(image)
+        else:
+            return image
 
-    def show(self,key):
+def show(self,key):
         """
         图片展示
         """
